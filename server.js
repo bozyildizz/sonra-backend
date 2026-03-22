@@ -469,22 +469,33 @@ io.on('connection', (socket) => {
   });
 
   socket.on('chat_message', (payload = {}) => {
-    const roomId = payload.roomId;
-    const text = sanitizeMessage(payload.text || '').trim();
-    if (!roomId || !text) return;
+  const roomId = payload.roomId;
+  const text = sanitizeMessage(payload.text || '').trim();
+  if (!roomId || !text) return;
 
-    const inClassicRoom = isSocketInRoom(roomId, socket.id);
-    const inDM = isSocketInDM(roomId, socket.id);
+  const inClassicRoom = isSocketInRoom(roomId, socket.id);
+  const inDM = isSocketInDM(roomId, socket.id);
 
-    if (!inClassicRoom && !inDM) return;
+  if (!inClassicRoom && !inDM) return;
 
-    io.to(roomId).emit('chat_message', {
-      roomId,
-      socketId: socket.id,
-      senderLabel: inDM ? 'Karşı taraf' : 'Anonim',
-      text,
-    });
+  let senderLabel = 'Anonim';
+
+  if (inDM) {
+    senderLabel = 'Karşı taraf';
+  } else {
+    const room = rooms.get(roomId);
+    if (room) {
+      senderLabel = anonLabelFor(room, socket.id);
+    }
+  }
+
+  io.to(roomId).emit('chat_message', {
+    roomId,
+    socketId: socket.id,
+    senderLabel,
+    text,
   });
+});
 
   socket.on('early_eliminate_request', (payload = {}) => {
     const room = rooms.get(payload.roomId);
