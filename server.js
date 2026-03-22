@@ -19,58 +19,15 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3002;
 
-/* =========================
-   IN-MEMORY STATE
-========================= */
-
 let waiting = {
   M: [],
   F: [],
 };
 
 const users = new Map();
-// socketId -> {
-//   socketId,
-//   gender,
-//   photoBase64,
-//   currentRoomId,
-//   dmRoomId,
-//   inQueue,
-//   blocked
-// }
-
 const rooms = new Map();
-// roomId -> {
-//   roomId,
-//   players: [{ socketId, gender, photoBase64, alive }],
-//   round,
-//   roundDuration,
-//   timeLeft,
-//   timer,
-//   phase,
-//   finalDecisions
-// }
-
 const dmRooms = new Map();
-// dmRoomId -> {
-//   dmRoomId,
-//   users: [socketIdA, socketIdB],
-//   activeCallId: string | null
-// }
-
 const activeCalls = new Map();
-// callId -> {
-//   callId,
-//   roomId,
-//   callerId,
-//   calleeId,
-//   type: 'audio' | 'video',
-//   status: 'ringing' | 'accepted' | 'ended'
-// }
-
-/* =========================
-   HELPERS
-========================= */
 
 const profanityList = ['küfür1', 'küfür2', 'argo1'];
 
@@ -192,10 +149,6 @@ function sendPlayerHome(socketId, roomId, autoRequeue) {
   }
 }
 
-/* =========================
-   MATCH / ROOM LOGIC
-========================= */
-
 function tryCreateRoom() {
   while (waiting.F.length >= 1 && waiting.M.length >= 2) {
     const femaleId = waiting.F.shift();
@@ -264,7 +217,6 @@ function startRoundTimer(roomId) {
   if (!room) return;
 
   stopRoundTimer(room);
-
   room.phase = 'chat';
   room.timeLeft = room.roundDuration;
 
@@ -448,15 +400,14 @@ function startDM(roomId) {
     activeCallId: null,
   });
 
-  // KRİTİK DÜZELTME:
-  // Önce dm_started olayını kullanıcılara direkt socket üzerinden gönder
+  // Önce dm_started olayını direkt kullanıcılara gönder
   for (const socketId of targetSocketIds) {
     io.to(socketId).emit('dm_started', {
       roomId: dmRoomId,
     });
   }
 
-  // Sonra eski odadan çıkar ve DM odasına al
+  // Sonra eski odadan çıkar, DM odasına al
   for (const socketId of targetSocketIds) {
     const socket = io.sockets.sockets.get(socketId);
     socket?.leave(roomId);
@@ -473,10 +424,6 @@ function startDM(roomId) {
 
   rooms.delete(roomId);
 }
-
-/* =========================
-   SOCKET
-========================= */
 
 io.on('connection', (socket) => {
   console.log(`[SOCKET] connected ${socket.id}`);
@@ -547,8 +494,6 @@ io.on('connection', (socket) => {
     if (!female || female.socketId !== socket.id) return;
     if (room.phase !== 'chat') return;
 
-    console.log(`[ROOM] early eliminate requested room=${room.roomId} by=${socket.id}`);
-
     stopRoundTimer(room);
     beginElimination(room.roomId);
   });
@@ -560,8 +505,6 @@ io.on('connection', (socket) => {
     const female = aliveFemale(room);
     if (!female || female.socketId !== socket.id) return;
     if (room.phase !== 'choosing') return;
-
-    console.log(`[ROOM] eliminate room=${room.roomId} target=${payload.target}`);
 
     eliminatePlayer(room.roomId, payload.target);
   });
@@ -606,8 +549,6 @@ io.on('connection', (socket) => {
     if (!dm) return;
     if (!dm.users.includes(socket.id)) return;
 
-    console.log(`[DM] leave dmRoomId=${dmRoomId} by=${socket.id}`);
-
     if (dm.activeCallId) {
       endCallAndNotify(dm.activeCallId, socket.id, 'dm_left');
     }
@@ -626,10 +567,6 @@ io.on('connection', (socket) => {
     dmRooms.delete(dmRoomId);
   });
 
-  /* =========================
-     CALL SIGNALING
-  ========================= */
-
   socket.on('start_call', (payload = {}) => {
     const roomId = payload.roomId;
     const callId = payload.callId || uuidv4();
@@ -637,39 +574,23 @@ io.on('connection', (socket) => {
 
     const dm = dmRooms.get(roomId);
     if (!dm) {
-      socket.emit('call_rejected', {
-        roomId,
-        callId,
-        reason: 'dm_not_found',
-      });
+      socket.emit('call_rejected', { roomId, callId, reason: 'dm_not_found' });
       return;
     }
 
     if (!dm.users.includes(socket.id)) {
-      socket.emit('call_rejected', {
-        roomId,
-        callId,
-        reason: 'not_in_dm',
-      });
+      socket.emit('call_rejected', { roomId, callId, reason: 'not_in_dm' });
       return;
     }
 
     if (dm.activeCallId) {
-      socket.emit('call_rejected', {
-        roomId,
-        callId,
-        reason: 'busy',
-      });
+      socket.emit('call_rejected', { roomId, callId, reason: 'busy' });
       return;
     }
 
     const otherId = getDMOtherUser(roomId, socket.id);
     if (!otherId) {
-      socket.emit('call_rejected', {
-        roomId,
-        callId,
-        reason: 'peer_not_found',
-      });
+      socket.emit('call_rejected', { roomId, callId, reason: 'peer_not_found' });
       return;
     }
 
@@ -703,13 +624,7 @@ io.on('connection', (socket) => {
     if (call.status !== 'ringing') return;
 
     call.status = 'accepted';
-
-    console.log(`[CALL] accepted callId=${callId} by=${socket.id}`);
-
-    io.to(call.callerId).emit('call_accepted', {
-      roomId,
-      callId,
-    });
+    io.to(call.callerId).emit('call_accepted', { roomId, callId });
   });
 
   socket.on('reject_call', (payload = {}) => {
@@ -717,8 +632,6 @@ io.on('connection', (socket) => {
     const call = activeCalls.get(callId);
     if (!call || call.roomId !== roomId) return;
     if (call.calleeId !== socket.id) return;
-
-    console.log(`[CALL] rejected callId=${callId} by=${socket.id}`);
 
     io.to(call.callerId).emit('call_rejected', {
       roomId,
@@ -734,8 +647,6 @@ io.on('connection', (socket) => {
     const call = activeCalls.get(callId);
     if (!call || call.roomId !== roomId) return;
     if (call.callerId !== socket.id && call.calleeId !== socket.id) return;
-
-    console.log(`[CALL] ended callId=${callId} by=${socket.id}`);
 
     endCallAndNotify(callId, socket.id, 'manual_end');
   });
@@ -839,10 +750,6 @@ io.on('connection', (socket) => {
     emitQueueCount();
   });
 });
-
-/* =========================
-   HTTP
-========================= */
 
 app.get('/', (_, res) => {
   res.json({
