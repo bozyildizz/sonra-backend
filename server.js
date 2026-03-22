@@ -399,9 +399,7 @@ function goFinal(roomId) {
     return;
   }
 
-  if (alive.length > 2) {
-    return;
-  }
+  if (alive.length > 2) return;
 
   const male = alive.find((p) => p.gender === 'M');
   const female = alive.find((p) => p.gender === 'F');
@@ -442,30 +440,36 @@ function startDM(roomId) {
   if (alive.length !== 2) return;
 
   const dmRoomId = uuidv4();
+  const targetSocketIds = alive.map((p) => p.socketId);
 
   dmRooms.set(dmRoomId, {
     dmRoomId,
-    users: alive.map((p) => p.socketId),
+    users: targetSocketIds,
     activeCallId: null,
   });
 
-  for (const p of alive) {
-    const socket = io.sockets.sockets.get(p.socketId);
+  // KRİTİK DÜZELTME:
+  // Önce dm_started olayını kullanıcılara direkt socket üzerinden gönder
+  for (const socketId of targetSocketIds) {
+    io.to(socketId).emit('dm_started', {
+      roomId: dmRoomId,
+    });
+  }
+
+  // Sonra eski odadan çıkar ve DM odasına al
+  for (const socketId of targetSocketIds) {
+    const socket = io.sockets.sockets.get(socketId);
     socket?.leave(roomId);
     socket?.join(dmRoomId);
 
-    const user = users.get(p.socketId);
+    const user = users.get(socketId);
     if (user) {
       user.dmRoomId = dmRoomId;
       user.currentRoomId = null;
     }
   }
 
-  console.log(`[DM] started dmRoomId=${dmRoomId} users=${alive.map((p) => p.socketId).join(',')}`);
-
-  io.to(roomId).emit('dm_started', {
-    roomId: dmRoomId,
-  });
+  console.log(`[DM] started dmRoomId=${dmRoomId} users=${targetSocketIds.join(',')}`);
 
   rooms.delete(roomId);
 }
@@ -525,9 +529,7 @@ io.on('connection', (socket) => {
     const inClassicRoom = isSocketInRoom(roomId, socket.id);
     const inDM = isSocketInDM(roomId, socket.id);
 
-    if (!inClassicRoom && !inDM) {
-      return;
-    }
+    if (!inClassicRoom && !inDM) return;
 
     io.to(roomId).emit('chat_message', {
       roomId,
@@ -635,7 +637,6 @@ io.on('connection', (socket) => {
 
     const dm = dmRooms.get(roomId);
     if (!dm) {
-      console.log(`[CALL] start rejected: no dm room roomId=${roomId}`);
       socket.emit('call_rejected', {
         roomId,
         callId,
@@ -645,7 +646,6 @@ io.on('connection', (socket) => {
     }
 
     if (!dm.users.includes(socket.id)) {
-      console.log(`[CALL] start rejected: socket not in dm room socket=${socket.id} roomId=${roomId}`);
       socket.emit('call_rejected', {
         roomId,
         callId,
@@ -655,7 +655,6 @@ io.on('connection', (socket) => {
     }
 
     if (dm.activeCallId) {
-      console.log(`[CALL] start rejected: room busy roomId=${roomId} activeCallId=${dm.activeCallId}`);
       socket.emit('call_rejected', {
         roomId,
         callId,
@@ -666,7 +665,6 @@ io.on('connection', (socket) => {
 
     const otherId = getDMOtherUser(roomId, socket.id);
     if (!otherId) {
-      console.log(`[CALL] start rejected: other user not found roomId=${roomId}`);
       socket.emit('call_rejected', {
         roomId,
         callId,
@@ -676,6 +674,7 @@ io.on('connection', (socket) => {
     }
 
     dm.activeCallId = callId;
+
     activeCalls.set(callId, {
       callId,
       roomId,
@@ -747,8 +746,6 @@ io.on('connection', (socket) => {
     if (!call || call.roomId !== roomId) return;
     if (call.callerId !== socket.id) return;
 
-    console.log(`[WEBRTC] offer callId=${callId} ${socket.id} -> ${call.calleeId}`);
-
     io.to(call.calleeId).emit('webrtc_offer', payload);
   });
 
@@ -757,8 +754,6 @@ io.on('connection', (socket) => {
     const call = activeCalls.get(callId);
     if (!call || call.roomId !== roomId) return;
     if (call.calleeId !== socket.id) return;
-
-    console.log(`[WEBRTC] answer callId=${callId} ${socket.id} -> ${call.callerId}`);
 
     io.to(call.callerId).emit('webrtc_answer', payload);
   });
